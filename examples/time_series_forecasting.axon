@@ -1,0 +1,115 @@
+# ============================================================
+# Time Series Forecasting — Stock Price Prediction
+# Demonstrates: timeseries blocks, LSTM, Temporal Fusion
+# Transformer, Prophet baseline, feature engineering,
+# walk-forward validation, and probabilistic forecasting.
+# ============================================================
+
+data StockData:
+    source: "datasets/sp500_daily.parquet"
+    format: parquet
+    time_col: date
+    target_col: close_price
+    freq: "1D"
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, SPY]
+    date_range: ["2010-01-01", "2024-01-01"]
+    split: 70/15/15                    # time-ordered, no shuffle
+    scale: RobustScaler
+
+feature StockFeatures:
+    source: StockData
+    technical_indicators: [
+        RSI(window=14),
+        MACD(fast=12, slow=26, signal=9),
+        BollingerBands(window=20, num_std=2.0),
+        ATR(window=14),
+        OBV(),
+        VWAP(),
+        SMA(windows=[5, 10, 20, 50, 200]),
+        EMA(windows=[12, 26])
+    ]
+    calendar_features: [day_of_week, month, quarter, is_month_end, is_quarter_end]
+    lag_features: Lag(columns=[close_price, volume, rsi], lags=[1, 2, 3, 5, 10])
+    rolling_stats: RollingStats(columns=[close_price], windows=[5, 10, 20],
+                                stats=[mean, std, min, max])
+
+# Stacked LSTM for sequence modeling
+timeseries LSTMForecaster:
+    architecture: lstm
+    data: StockFeatures
+    input_seq_len: 60                  # 60 trading days lookback
+    output_seq_len: 10                 # 10-day forecast horizon
+    hidden_size: 256
+    num_layers: 3
+    dropout: 0.2
+    bidirectional: false
+    head: [Linear(256 -> 64), ReLU(), Linear(64 -> 10)]
+    quantile_output: [0.1, 0.5, 0.9]  # probabilistic forecasting
+
+    optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 1.0e-4
+
+    loss: QuantileLoss(quantiles=[0.1, 0.5, 0.9])
+    lr_schedule: ReduceLROnPlateau(factor=0.5, patience=10)
+    gradient_clip: 1.0
+    epochs: 200
+    early_stopping: patience=20, monitor=val_loss
+
+# Temporal Fusion Transformer
+timeseries TFTForecaster:
+    architecture: temporal_fusion_transformer
+    data: StockFeatures
+    input_seq_len: 60
+    output_seq_len: 10
+    d_model: 160
+    num_heads: 4
+    num_encoder_layers: 1
+    num_decoder_layers: 1
+    dropout: 0.1
+    known_future_inputs: [day_of_week, month, is_month_end]
+    static_inputs: [symbol_embedding]
+    quantiles: [0.1, 0.5, 0.9]
+
+    optimizer:
+        type: Adam
+        lr: 0.001
+
+    loss: QuantileLoss(quantiles=[0.1, 0.5, 0.9])
+    epochs: 200
+    batch_size: 64
+    early_stopping: patience=20, monitor=val_loss
+
+# Prophet baseline (statistical)
+timeseries ProphetBaseline:
+    architecture: prophet
+    data: StockData
+    seasonality_mode: multiplicative
+    yearly_seasonality: true
+    weekly_seasonality: true
+    daily_seasonality: false
+    changepoint_prior_scale: 0.05
+    seasonality_prior_scale: 10.0
+    extra_regressors: [volume, rsi_14, macd]
+    uncertainty_samples: 1000
+    forecast_horizon: 10
+
+# Walk-forward validation (time-series aware cross-validation)
+evaluate TimeSeriesEval:
+    models: [LSTMForecaster, TFTForecaster, ProphetBaseline]
+    data: StockData
+    strategy: walk_forward
+    initial_train_size: 0.6
+    test_window: 63                    # one quarter
+    step_size: 21                      # re-train monthly
+    metrics: [MAE, RMSE, MAPE, sMAPE, directional_accuracy, sharpe_ratio]
+    plot_predictions: true
+    save: "outputs/timeseries_eval.html"
+
+monitor ForecastMonitor:
+    watch: [mae, rmse, mape, directional_accuracy]
+    alert_if: mape > 0.05
+    log_every: epoch
+    dashboard: "wandb"
+    project: "stock-forecasting"
