@@ -1,0 +1,78 @@
+# ================================================================
+# Axon Example: NLP Fine-Tuning with LoRA
+# ================================================================
+# Fine-tune a pretrained LLM for sentiment classification
+# using parameter-efficient fine-tuning (LoRA/QLoRA)
+
+# ── Custom Classifier Model ───────────────────────────────────
+
+model SentimentClassifier:
+    encoder: Linear(768 -> 256)
+    relu: ReLU()
+    dropout: Dropout(0.2)
+    classifier: Linear(256 -> 3)
+
+# ── Fine-Tune with LoRA ───────────────────────────────────────
+
+finetune SentimentFT:
+    base_model: "microsoft/deberta-v3-base"
+    method: lora
+    r: 16
+    alpha: 32
+    dropout: 0.05
+
+# ── Data ───────────────────────────────────────────────────────
+
+data SentimentData:
+    source: "./data/sentiment"
+    format: csv
+    split: 80/10/10
+    
+    loader:
+        batch_size: 16
+        shuffle: true
+        num_workers: 2
+
+# ── Training ───────────────────────────────────────────────────
+
+train SentimentTraining:
+    model: SentimentClassifier()
+    data: SentimentData()
+    
+    optimizer: AdamW(lr=2e-5, weight_decay=0.01)
+    scheduler: CosineAnnealing(T_max=10)
+    loss: CrossEntropy
+    
+    epochs: 10
+    device: auto
+    precision: fp16
+    
+    metrics:
+        accuracy
+        f1(average="weighted")
+
+# ── Evaluation ─────────────────────────────────────────────────
+
+evaluate SentimentTraining:
+    checkpoint: "best"
+    data: SentimentData.test
+    
+    metrics:
+        accuracy
+        precision
+        recall
+        f1
+        classification_report
+
+# ── Explain ────────────────────────────────────────────────────
+
+explain SentimentExplain:
+    model: SentimentClassifier
+    method: shap
+    data: SentimentData
+
+# ── Ensemble ───────────────────────────────────────────────────
+
+ensemble SentimentEnsemble:
+    models: [SentimentClassifier, SentimentFT]
+    strategy: averaging
