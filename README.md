@@ -16,14 +16,14 @@
 A declarative language that transpiles to PyTorch, TensorFlow, or JAX — replacing
 thousands of lines of ML boilerplate with clean, readable syntax.
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue?style=for-the-badge)](https://github.com/axon-lang/axon)
-[![Tests](https://img.shields.io/badge/tests-153%20passed-brightgreen?style=for-the-badge)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue?style=for-the-badge)](https://github.com/desenyon/axon-lang)
+[![Tests](https://img.shields.io/badge/tests-225%20passed-brightgreen?style=for-the-badge)](tests/)
 [![Python](https://img.shields.io/badge/python-3.10+-yellow?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)](LICENSE)
 
 <br>
 
-**`10,000 lines`** of implementation &nbsp;·&nbsp; **`35`** block types &nbsp;·&nbsp; **`3`** backends &nbsp;·&nbsp; **`18`** examples &nbsp;·&nbsp; **`153`** tests
+**`16,000 lines`** of implementation &nbsp;·&nbsp; **`35`** block types &nbsp;·&nbsp; **`3`** backends &nbsp;·&nbsp; **`18`** examples &nbsp;·&nbsp; **`225`** tests
 
 <br>
 
@@ -53,9 +53,18 @@ axon compile model.axon --backend tensorflow
 
 # Validate syntax
 axon check model.axon
+axon check model.axon --semantic         # Deep ML pattern analysis
+
+# Developer tools
+axon fmt model.axon                       # Auto-format
+axon lint model.axon                      # Static analysis (13 rules)
+axon watch ./src                          # Auto-recompile on changes
 
 # Interactive REPL
 axon repl
+
+# Start LSP server (for VS Code / editors)
+axon lsp
 ```
 
 <br>
@@ -426,19 +435,38 @@ axon/
 │   ├── __init__.py                #   Version + public API
 │   ├── __main__.py                #   python -m axon support
 │   ├── parser/
-│   │   ├── lexer.py               #   390 lines — Tokenizer with bracket-depth tracking
-│   │   ├── parser.py              #   960 lines — Recursive descent, 35 block types
-│   │   └── ast_nodes.py           #   739 lines — 58 AST node types
+│   │   ├── lexer.py               #   Multi-line string support, bracket-depth tracking
+│   │   ├── parser.py              #   Recursive descent, 35 block types + plugin dispatch
+│   │   └── ast_nodes.py           #   59 AST node types (incl. AxonImport)
 │   ├── transpiler/
-│   │   └── engine.py              #   4,860 lines — Multi-backend code generation
-│   └── runtime/
-│       ├── executor.py            #   158 lines — Compile + execute orchestrator
-│       └── config.py              #   78 lines — Configuration management
+│   │   └── engine.py              #   Multi-backend code generation (PyTorch/TF/JAX)
+│   ├── runtime/
+│   │   ├── executor.py            #   Compile + execute orchestrator
+│   │   └── config.py              #   Configuration management
+│   ├── formatter.py               #   Code formatter (axon fmt)
+│   ├── linter.py                  #   Static analysis — 13 rules (axon lint)
+│   ├── semantic.py                #   Shape inference, ML pattern validation
+│   ├── modules.py                 #   Module system with circular import detection
+│   ├── plugins.py                 #   Plugin API with hooks and registry
+│   ├── watcher.py                 #   File watcher for auto-recompile
+│   ├── lsp/                       #   Language Server Protocol
+│   │   ├── server.py              #     JSON-RPC 2.0 LSP server
+│   │   ├── completions.py         #     Context-aware autocomplete
+│   │   ├── diagnostics.py         #     Real-time error diagnostics
+│   │   └── hover.py               #     Documentation on hover
+│   └── types/
+│       └── __init__.py            #   Type system placeholder
 │
 ├── cli/
-│   └── main.py                    #   320 lines — CLI (compile/run/check/repl/init)
+│   └── main.py                    #   CLI (compile/run/check/fmt/lint/watch/repl/lsp/init)
 │
-├── examples/                      #   18 comprehensive examples (2,200+ lines)
+├── editors/vscode/                #   VS Code extension
+│   ├── package.json               #     Extension manifest
+│   ├── syntaxes/axon.tmLanguage.json  # TextMate syntax highlighting
+│   ├── extension.js               #     LSP client
+│   └── language-configuration.json
+│
+├── examples/                      #   19 comprehensive examples
 │   ├── complete_vision.axon       #     Image classification end-to-end
 │   ├── nlp_finetuning.axon        #     BERT fine-tuning with LoRA
 │   ├── gan_image_generation.axon  #     WGAN-GP image synthesis
@@ -459,7 +487,7 @@ axon/
 │   └── end_to_end_production.axon #     Complete MLOps pipeline
 │
 ├── tests/
-│   └── test_axon.py               #   153 tests — lexer, parser, transpiler, integration
+│   └── test_axon.py               #   225 tests — lexer, parser, transpiler, tools, integration
 │
 ├── QA_REPORT.md                   #   Comprehensive QA audit results
 ├── LANGUAGE_SPEC.md               #   Full language specification
@@ -499,7 +527,7 @@ All **18 examples** compile successfully across all 3 backends.
 
 ```bash
 # From source
-git clone https://github.com/axon-lang/axon.git
+git clone https://github.com/desenyon/axon-lang.git
 cd axon
 pip install -e .
 
@@ -517,15 +545,15 @@ pip install -e ".[all]"         # Everything
 | Phase | Status | Focus |
 |:------|:------:|:------|
 | Core Language | ✅ | Lexer, parser, transpiler, 35 block types, 3 backends |
-| QA & Hardening | ✅ | 153 tests, 18 examples, 12 bugs found and fixed |
-| Multi-line Strings | 🔲 | YAML-style `\|` block scalar syntax |
-| `axon fmt` | 🔲 | Code formatter for `.axon` files |
-| `axon lint` | 🔲 | Static analysis and best-practice checks |
-| Watch Mode | 🔲 | Auto-recompile on file changes |
-| Semantic Analysis | 🔲 | Shape checking, ML pattern validation |
-| Module System | 🔲 | `import Model from "./other.axon"` |
-| Plugin API | 🔲 | Custom block types without modifying core |
-| LSP Server | 🔲 | VS Code extension with autocomplete + diagnostics |
+| QA & Hardening | ✅ | 225 tests, 18 examples, 12 bugs found and fixed |
+| Multi-line Strings | ✅ | YAML-style `\|`, `\|>`, `\|-` block scalar syntax |
+| `axon fmt` | ✅ | Code formatter with alignment, sorting, quote normalization |
+| `axon lint` | ✅ | 13 lint rules (W001–W010, E001–E003) with `--fix` support |
+| Watch Mode | ✅ | Auto-recompile on file changes with colored output |
+| Semantic Analysis | ✅ | Shape inference, type checking, ML pattern validation |
+| Module System | ✅ | `import Model from "./other.axon"` with circular import detection |
+| Plugin API | ✅ | Custom block types, hooks, manifest-based discovery |
+| LSP Server | ✅ | VS Code extension with autocomplete, hover, diagnostics, go-to-definition |
 
 <br>
 
@@ -541,6 +569,6 @@ MIT
 
 **Built with obsessive attention to the ML developer experience.**
 
-*Axon v2.0.0*
+*Axon v0.1.2*
 
 </div>
