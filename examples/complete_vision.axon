@@ -1,0 +1,105 @@
+# ================================================================
+# Axon Example: Complete Computer Vision Pipeline
+# ================================================================
+# This demonstrates the full Axon workflow:
+#   1. Model definition with pretrained backbone
+#   2. Data pipeline with augmentations
+#   3. Training with mixed precision + callbacks
+#   4. Evaluation with comprehensive metrics
+#   5. Hyperparameter search
+#   6. ONNX export + API deployment
+
+# ── Model ──────────────────────────────────────────────────────
+
+model ImageClassifier:
+    backbone: resnet50(pretrained=true)
+    pool: AdaptiveAvgPool2d(1)
+    flatten: Flatten()
+    dropout: Dropout(0.3)
+    head: Linear(2048 -> @num_classes)
+
+# ── Data ───────────────────────────────────────────────────────
+
+data CIFAR10Data:
+    source: "./data/cifar10"
+    format: image_folder
+    split: 80/10/10
+
+    transform:
+        resize(224, 224)
+        normalize(imagenet)
+        augment(horizontal_flip, random_crop, color_jitter)
+
+    loader:
+        batch_size: 32
+        shuffle: true
+        num_workers: 4
+
+# ── Training ───────────────────────────────────────────────────
+
+train VisionExperiment:
+    model: ImageClassifier(num_classes=10)
+    data: CIFAR10Data()
+
+    optimizer: AdamW(lr=3e-4, weight_decay=1e-4)
+    scheduler: CosineAnnealing(T_max=50)
+    loss: CrossEntropy
+
+    epochs: 50
+    device: auto
+    precision: fp16
+
+    callbacks:
+        early_stopping(patience=10, monitor="val_loss")
+        checkpoint(save_best=true, monitor="val_accuracy")
+        log_to(wandb, project="cifar10-vision")
+
+    metrics:
+        accuracy
+        f1(average="macro")
+
+# ── Evaluation ─────────────────────────────────────────────────
+
+evaluate VisionExperiment:
+    checkpoint: "best"
+    data: CIFAR10Data.test
+
+    metrics:
+        accuracy
+        precision
+        recall
+        f1
+        confusion_matrix
+        roc_auc
+
+    export: "results/eval_report.html"
+
+# ── Hyperparameter Search ──────────────────────────────────────
+
+search VisionSearch:
+    base: VisionExperiment
+    method: bayesian
+    trials: 30
+
+    space:
+        lr: log_uniform(1e-5, 1e-2)
+        batch_size: choice(16, 32, 64, 128)
+        weight_decay: log_uniform(1e-6, 1e-3)
+        dropout: uniform(0.1, 0.5)
+
+    objective: maximize("val_accuracy")
+    pruner: median(n_warmup_steps=5)
+
+# ── Deployment ─────────────────────────────────────────────────
+
+deploy VisionModel:
+    checkpoint: "best"
+    format: onnx
+    optimize: true
+    quantize: int8
+
+    serve:
+        framework: fastapi
+        endpoint: "/classify"
+        batch: true
+        max_batch_size: 32
