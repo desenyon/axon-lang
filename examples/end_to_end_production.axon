@@ -1,0 +1,214 @@
+# ============================================================
+# End-to-End Production ML Pipeline — Fraud Detection
+# Demonstrates: full lifecycle from raw data to deployed service:
+# data ingestion → feature engineering → training → evaluation
+# → optimization → deployment → serving → monitoring → testing.
+# Shows pipeline orchestration, A/B testing, and alerting.
+# ============================================================
+
+# ── RAW DATA ────────────────────────────────────────────────
+
+data RawTransactions:
+    source: "s3://ml-data/transactions/raw/"
+    format: parquet
+    partitioned_by: [year, month, day]
+    schema:
+        transaction_id: str
+        user_id: str
+        merchant_id: str
+        amount: float
+        currency: str
+        timestamp: datetime
+        merchant_category: str
+        device_type: str
+        ip_country: str
+        is_fraud: bool
+    date_range: ["2022-01-01", "2024-06-30"]
+    split: 80/10/10
+    stratify: is_fraud
+    class_ratio: 0.02                  # 2% fraud rate
+
+# ── FEATURE ENGINEERING ─────────────────────────────────────
+
+feature TransactionFeatures:
+    source: RawTransactions
+    transforms: [
+        # User behavior aggregations (last N transactions)
+        UserAgg(group=user_id, windows=[1h, 6h, 24h, 7d, 30d],
+                cols=[amount, is_fraud],
+                aggs=[count, sum, mean, std, max]),
+        # Merchant risk features
+        MerchantAgg(group=merchant_id, windows=[7d, 30d],
+                    cols=[is_fraud, amount], aggs=[mean, count]),
+        # Time features
+        TimeFeatures(col=timestamp,
+                     extract=[hour, day_of_week, is_weekend, days_since_signup]),
+        # Velocity features
+        VelocityFeatures(user_id=user_id, time_col=timestamp,
+                         windows=[5min, 1h, 24h]),
+        # Embeddings for high-cardinality categoricals
+        EntityEmbedding(col=merchant_category, dim=16),
+        EntityEmbedding(col=ip_country, dim=8),
+        # Label encode low-cardinality
+        OrdinalEncoder(cols=[currency, device_type])
+    ]
+    handle_missing: median_fill
+    scale: RobustScaler(quantile_range=[5, 95])
+
+# ── MODEL TRAINING ───────────────────────────────────────────
+
+tabular FraudGBM:
+    algorithm: lightgbm
+    task: binary_classification
+    data: TransactionFeatures
+    params:
+        num_leaves: 127
+        max_depth: -1
+        learning_rate: 0.03
+        n_estimators: 2000
+        min_child_samples: 50
+        subsample: 0.8
+        colsample_bytree: 0.8
+        reg_alpha: 0.1
+        reg_lambda: 1.0
+        scale_pos_weight: 49           # 1/fraud_rate - 1
+        is_unbalance: false
+    early_stopping_rounds: 100
+    eval_metric: [auc, average_precision]
+    device: gpu
+    num_threads: 16
+
+search FraudHPO:
+    model: FraudGBM
+    strategy: bayesian
+    n_trials: 50
+    metric: average_precision
+    direction: maximize
+    cv_folds: StratifiedKFold(5)
+    space:
+        num_leaves: IntRange(31, 255)
+        learning_rate: LogUniform(0.01, 0.1)
+        subsample: Uniform(0.6, 1.0)
+        min_child_samples: IntRange(20, 200)
+
+# ── EVALUATION ───────────────────────────────────────────────
+
+evaluate FraudEvaluation:
+    model: FraudGBM
+    data: RawTransactions
+    split: test
+    metrics: [roc_auc, pr_auc, f1_at_threshold(0.5), precision_at_recall(0.9),
+              ks_statistic, brier_score, log_loss]
+    threshold_analysis: true
+    calibration: IsotonicRegression
+    fairness_check: [user_country, age_group]
+    save: "outputs/fraud_eval_report.html"
+
+explain FraudExplain:
+    model: FraudGBM
+    data: RawTransactions
+    method: shap
+    plot: [summary, waterfall]
+    top_features: 25
+    save: "outputs/fraud_shap.html"
+
+# ── OPTIMIZATION ─────────────────────────────────────────────
+
+distill FraudDistill:
+    teacher: FraudGBM
+    student: tabular(algorithm=lightgbm, params={n_estimators: 200, max_depth: 4})
+    data: TransactionFeatures
+    method: soft_labels
+    temperature: 2.0
+
+quantize FraudQuantize:
+    model: FraudGBM
+    method: int8_tree                  # quantize GBM leaf values to INT8
+    calibration_samples: 10000
+    save_dir: "checkpoints/fraud_gbm_int8"
+
+# ── DEPLOYMENT ───────────────────────────────────────────────
+
+deploy FraudModelDeploy:
+    model: FraudGBM
+    format: onnx
+    version: "v2.1.0"
+    registry: "mlflow://ml-registry/fraud-detector"
+    promotion_criteria:
+        pr_auc: ">= 0.92"
+        latency_p99_ms: "<= 5"
+    rollout:
+        strategy: canary
+        initial_traffic: 0.1           # 10% to new model
+        increment: 0.1
+        interval: 30min
+        auto_promote_if: pr_auc_delta > 0.005
+
+# ── SERVING ──────────────────────────────────────────────────
+
+serve FraudAPIServer:
+    model: FraudModelDeploy
+    runtime: triton
+    instances: 4
+    gpus_per_instance: 0               # CPU serving for low latency
+    max_batch_size: 256
+    max_latency_ms: 5
+    endpoint: "/v1/predict/fraud"
+    auth: api_key
+    rate_limit: 50000                  # requests per second
+    feature_store: "redis://feature-store:6379"
+    feature_ttl: 300                   # seconds
+
+# ── MONITORING ───────────────────────────────────────────────
+
+monitor FraudProductionMonitor:
+    model: FraudAPIServer
+    watch:
+        performance: [pr_auc, precision_at_k, recall, f1]
+        data_drift: [PSI(threshold=0.2), KS_Test(alpha=0.05)]
+        concept_drift: [ADWIN(delta=0.002)]
+        infra: [latency_p50, latency_p99, error_rate, throughput_rps]
+    reference_window: 30d
+    detect_every: 1h
+    alert:
+        pagerduty: true
+        conditions: [pr_auc < 0.88, psi > 0.25, error_rate > 0.01,
+                     latency_p99 > 10]
+    dashboard: "grafana"
+    project: "fraud-detection-prod"
+
+# ── TESTING ──────────────────────────────────────────────────
+
+test FraudProductionTests:
+    target: FraudAPIServer
+    suites: [
+        SmokeTest(n=10, expected_latency_ms=5),
+        LoadTest(rps=10000, duration=60, p99_threshold_ms=5),
+        AdversarialTest(perturbation=feature_noise, n=1000, invariance_threshold=0.95),
+        DataQualityTest(schema=RawTransactions, null_threshold=0.01),
+        ModelConsistencyTest(shadow_model=FraudDistill, agreement_threshold=0.97),
+        ABTest(control=FraudGBM, treatment=FraudDistill,
+               metric=pr_auc, traffic_split=0.5, min_samples=10000)
+    ]
+    run_on: [pre_deploy, post_deploy, daily_cron]
+    notify: "slack://ml-alerts"
+
+# ── PIPELINE ORCHESTRATION ───────────────────────────────────
+
+pipeline FraudMLPipeline:
+    schedule: "0 2 * * *"             # daily at 2 AM
+    steps: [
+        RawTransactions,
+        TransactionFeatures,
+        FraudGBM,
+        FraudHPO,
+        FraudEvaluation,
+        FraudExplain,
+        FraudQuantize,
+        FraudModelDeploy,
+        FraudProductionTests
+    ]
+    on_failure: notify_slack_and_halt
+    on_success: promote_and_notify
+    artifacts_dir: "s3://ml-artifacts/fraud-pipeline/"
+    experiment_tracking: "mlflow://ml-tracking"
