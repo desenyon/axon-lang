@@ -1,0 +1,129 @@
+# ============================================================
+# Distributed Training — LLM Pre-training at Scale
+# Demonstrates: DDP, FSDP, gradient accumulation, EMA,
+# activation checkpointing, mixed precision, ZeRO optimizer,
+# curriculum learning, and distributed evaluation.
+# ============================================================
+
+data WebTextCorpus:
+    source: ["datasets/c4", "datasets/pile", "datasets/refinedweb"]
+    format: text
+    tokenizer: "meta-llama/Llama-3-8B"  # reuse tokenizer
+    sequence_length: 2048
+    packing: true                      # pack short sequences together
+    blend_weights: [0.4, 0.3, 0.3]   # dataset mixing ratios
+    total_tokens: 1.0T                 # one trillion tokens
+    shuffle_buffer: 100000
+    num_workers: 64
+
+tokenizer LLaMATokenizer:
+    model: "meta-llama/Llama-3-8B"
+    vocab_size: 128256
+    add_bos: true
+    add_eos: false
+
+# 8B parameter transformer language model
+model LLM8B:
+    type: transformer_decoder
+    vocab_size: 128256
+    d_model: 4096
+    num_heads: 32
+    num_kv_heads: 8                    # grouped query attention
+    num_layers: 32
+    intermediate_dim: 14336
+    max_seq_len: 8192
+    rope_base: 500000                  # RoPE theta
+    norm_type: rmsnorm
+    norm_eps: 1.0e-5
+    activation: silu
+    tie_embeddings: false
+    init_std: 0.02
+
+pretrain DistributedPretraining:
+    model: LLM8B
+    data: WebTextCorpus
+    tokenizer: LLaMATokenizer
+
+    # Distributed strategy
+    distributed:
+        strategy: fsdp                 # Fully Sharded Data Parallel
+        sharding_strategy: full_shard
+        cpu_offload: false
+        mixed_precision: bf16
+        activation_checkpointing: true
+        num_nodes: 64
+        gpus_per_node: 8               # 512 A100 GPUs total
+        tensor_parallel: 1
+        pipeline_parallel: 1
+
+    # ZeRO-3 style optimizer
+    optimizer:
+        type: AdamW
+        lr: 3.0e-4
+        weight_decay: 0.1
+        betas: [0.9, 0.95]
+        eps: 1.0e-8
+        fused: true                    # fused CUDA kernel
+
+    lr_schedule: cosine_with_warmup
+    warmup_steps: 2000
+    min_lr: 3.0e-5
+    gradient_accumulation_steps: 4
+    gradient_clip: 1.0
+
+    # Curriculum learning
+    curriculum:
+        strategy: sequence_length
+        schedule: [
+            [0, 0.2, 1024],            # [start_frac, end_frac, seq_len]
+            [0.2, 1.0, 2048]
+        ]
+
+    # Exponential moving average
+    ema:
+        enabled: true
+        decay: 0.9999
+        update_every: 10
+
+    total_tokens: 1.0T
+    save_every_tokens: 10B
+    eval_every_tokens: 5B
+    checkpoint_dir: "checkpoints/llm_8b_pretrain"
+    resume: true                       # auto-resume from last checkpoint
+
+    compile: true                      # torch.compile for speed
+
+evaluate PretrainingEval:
+    model: LLM8B
+    benchmarks: [
+        HellaSwag(shots=0),
+        ARC_Easy(shots=25),
+        ARC_Challenge(shots=25),
+        MMLU(shots=5),
+        TruthfulQA(shots=0),
+        WinoGrande(shots=5),
+        GSM8K(shots=8),
+        HumanEval(shots=0)
+    ]
+    eval_every_tokens: 50B
+    distributed: true
+
+callback TrainingCallbacks:
+    trigger: [step_end, eval_end, checkpoint_saved]
+    actions: [
+        LogThroughput(tokens_per_sec=true, mfu=true),
+        LogGradNorm(),
+        LogWeightNorm(),
+        SaveTokenizedSamples(n=5, every=1000),
+        AlertOnNaN(),
+        AlertOnLossSpike(threshold=1.5)
+    ]
+
+monitor PretrainingMonitor:
+    watch: [loss, perplexity, lr, grad_norm, mfu, tokens_seen,
+            gpu_memory_gb, throughput_tokens_per_sec]
+    log_every: 10                      # steps
+    dashboard: "wandb"
+    project: "llm-8b-pretrain"
+    tags: ["fsdp", "bf16", "1T-tokens"]
+    alert_if: loss > 5.0
