@@ -1,0 +1,135 @@
+# ============================================================
+# Model Optimization — Distillation + Quantization + Pruning
+# Demonstrates: distill, quantize, benchmark blocks,
+# knowledge distillation, INT8/INT4 quantization, structured
+# pruning, ONNX export, and latency benchmarking.
+# ============================================================
+
+# Large teacher model (fine-tuned LLM)
+model TeacherLLM:
+    source: "checkpoints/llama3_70b_finetuned"
+    type: transformer_decoder
+    precision: bf16
+    device: cuda
+
+# Smaller student model to distill into
+model StudentLLM:
+    type: transformer_decoder
+    vocab_size: 128256
+    d_model: 2048
+    num_heads: 16
+    num_kv_heads: 8
+    num_layers: 16
+    intermediate_dim: 8192
+    max_seq_len: 4096
+    rope_base: 500000
+    norm_type: rmsnorm
+    activation: silu
+
+data DistillData:
+    source: "datasets/open_instruct_combined"
+    format: text
+    tokenizer: "meta-llama/Llama-3-8B"
+    sequence_length: 2048
+    split: 95/2.5/2.5
+    batch_size: 32
+
+# Knowledge distillation: 70B → 7B
+distill SequenceKD:
+    teacher: TeacherLLM
+    student: StudentLLM
+    data: DistillData
+    method: sequence_level_kd          # generate from teacher, train student on output
+
+    # Distillation losses
+    losses:
+        token_kd: KLDivergence(temperature=2.0, weight=0.5)
+        hard_label: CrossEntropy(weight=0.3)
+        hidden_state_mse: MSE(layer_mapping=auto, weight=0.2)
+
+    optimizer:
+        type: AdamW
+        lr: 5.0e-5
+        weight_decay: 0.01
+
+    lr_schedule: cosine_with_warmup
+    warmup_steps: 500
+    gradient_clip: 1.0
+    mixed_precision: bf16
+    epochs: 3
+    gradient_accumulation_steps: 4
+    checkpoint_dir: "checkpoints/student_llm_kd"
+
+# INT8 quantization (post-training)
+quantize INT8Quantization:
+    model: StudentLLM
+    source: "checkpoints/student_llm_kd"
+    method: gptq                       # GPTQ vs AWQ vs bitsandbytes
+    bits: 8
+    group_size: 128
+    calibration_data: DistillData
+    calibration_samples: 512
+    desc_act: true                     # activation ordering
+    save_dir: "checkpoints/student_llm_int8"
+
+# INT4 quantization (aggressive)
+quantize INT4Quantization:
+    model: StudentLLM
+    source: "checkpoints/student_llm_kd"
+    method: awq
+    bits: 4
+    group_size: 128
+    calibration_data: DistillData
+    calibration_samples: 256
+    zero_point: true
+    save_dir: "checkpoints/student_llm_int4"
+
+# Structured pruning
+quantize StructuredPruning:
+    model: StudentLLM
+    source: "checkpoints/student_llm_kd"
+    method: magnitude_pruning
+    sparsity: 0.3                      # remove 30% of weights
+    scope: [attention.q_proj, attention.k_proj, attention.v_proj, mlp.gate_proj]
+    granularity: head                  # prune entire attention heads
+    recovery_finetune:
+        epochs: 1
+        lr: 1.0e-5
+        data: DistillData
+    save_dir: "checkpoints/student_llm_pruned"
+
+# ONNX export for deployment
+quantize ONNXExport:
+    model: StudentLLM
+    source: "checkpoints/student_llm_int8"
+    format: onnx
+    opset: 17
+    dynamic_axes:
+        input_ids: [0, 1]
+        attention_mask: [0, 1]
+    optimize: true                     # OnnxRuntime graph optimizations
+    save_dir: "exports/student_llm_int8.onnx"
+
+# Latency and throughput benchmarking
+benchmark LatencyBenchmark:
+    models:
+        teacher_fp16: TeacherLLM
+        student_bf16: StudentLLM
+        student_int8: INT8Quantization
+        student_int4: INT4Quantization
+        student_pruned: StructuredPruning
+    input_shapes: [[1, 128], [1, 512], [1, 1024], [4, 128], [4, 512]]
+    metrics: [
+        latency_p50_ms,
+        latency_p95_ms,
+        latency_p99_ms,
+        throughput_tokens_per_sec,
+        memory_peak_gb,
+        model_size_mb,
+        perplexity_wikitext2
+    ]
+    num_warmup: 20
+    num_runs: 100
+    device: cuda
+    save: "outputs/benchmark_results.json"
+    plot: "outputs/benchmark_latency_chart.html"
