@@ -1,0 +1,141 @@
+# ============================================================
+# LLM Agent — Tool Calling, Memory, and Multi-Agent Orchestration
+# Demonstrates: agent blocks, tool definitions, memory stores,
+# planning, reflection, multi-agent coordination, and
+# structured output with evaluation.
+# ============================================================
+
+# Tool definitions the agent can invoke
+feature WebSearchTool:
+    type: tool
+    name: web_search
+    description: "Search the web for current information"
+    params:
+        query: str
+        num_results: int = 5
+    returns: list[SearchResult]
+    provider: serper
+    timeout: 10
+
+feature CodeInterpreterTool:
+    type: tool
+    name: execute_code
+    description: "Execute Python code in a sandboxed environment"
+    params:
+        code: str
+        language: str = "python"
+    returns: CodeOutput
+    sandbox: e2b
+    timeout: 30
+    allowed_packages: [numpy, pandas, matplotlib, scipy, sklearn]
+
+feature FileSystemTool:
+    type: tool
+    name: file_ops
+    description: "Read, write, and list files in the workspace"
+    params:
+        operation: Literal[read, write, list, delete]
+        path: str
+        content: str = null
+    returns: FileResult
+    base_dir: "/workspace/agent/"
+    max_file_size_mb: 10
+
+feature DatabaseTool:
+    type: tool
+    name: query_database
+    description: "Execute SQL queries on the analytics database"
+    params:
+        sql: str
+        database: str = "analytics"
+    returns: DataFrame
+    connection: "postgresql://analytics-db:5432/prod"
+    read_only: true
+    timeout: 30
+
+# Episodic memory store (conversation history)
+embedding EpisodicMemory:
+    model: "BAAI/bge-small-en-v1.5"
+    store: faiss
+    max_memories: 10000
+    retrieval_k: 10
+    similarity_threshold: 0.7
+    persist_dir: "memory/episodic"
+
+# Semantic/procedural memory (long-term facts)
+embedding SemanticMemory:
+    model: "BAAI/bge-small-en-v1.5"
+    store: chroma
+    collection: "agent_knowledge"
+    persist_dir: "memory/semantic"
+
+# Core LLM agent
+agent ResearchAgent:
+    llm: "anthropic/claude-3-5-sonnet-20241022"
+    llm_config:
+        max_tokens: 4096
+        temperature: 0.1
+
+    tools: [WebSearchTool, CodeInterpreterTool, FileSystemTool, DatabaseTool]
+    tool_choice: auto
+    max_tool_calls: 20
+
+    memory:
+        episodic: EpisodicMemory
+        semantic: SemanticMemory
+
+    planning:
+        strategy: react                # ReAct: Reason + Act
+        reflection_interval: 3        # reflect every 3 steps
+        max_iterations: 50
+
+    system_prompt: "You are an expert data scientist and researcher. Analyze problems, gather data using tools, write code to validate findings, and produce clear reports. Always verify from multiple sources."
+
+    output_format:
+        type: structured
+        schema:
+            summary: str
+            methodology: str
+            findings: list[str]
+            code_artifacts: list[str]
+            confidence: float
+            sources: list[str]
+
+# Specialized sub-agents
+agent DataAnalystAgent:
+    llm: "openai/gpt-4o"
+    tools: [CodeInterpreterTool, DatabaseTool]
+    system_prompt: "You are a data analyst. Write clean, well-commented Python."
+    max_iterations: 20
+
+agent WebResearchAgent:
+    llm: "openai/gpt-4o-mini"
+    tools: [WebSearchTool, FileSystemTool]
+    system_prompt: "You are a web researcher. Find and summarize information accurately."
+    max_iterations: 15
+
+# Multi-agent orchestrator
+agent OrchestratorAgent:
+    llm: "anthropic/claude-3-5-sonnet-20241022"
+    sub_agents: [ResearchAgent, DataAnalystAgent, WebResearchAgent]
+    coordination: hierarchical         # vs peer-to-peer
+    task_delegation: llm_routing      # LLM decides which sub-agent to use
+    result_aggregation: llm_synthesis
+
+# Agent evaluation
+evaluate AgentEvaluation:
+    agent: ResearchAgent
+    benchmark: "datasets/agent_eval_tasks.json"
+    metrics: [task_success_rate, tool_call_accuracy, hallucination_rate,
+              avg_steps_to_completion, token_efficiency]
+    judge_llm: "gpt-4o"
+    num_tasks: 100
+    timeout_per_task: 300              # seconds
+
+monitor AgentMonitor:
+    watch: [tool_call_count, tool_success_rate, tokens_used, task_success,
+            avg_latency, memory_utilization]
+    log_every: task
+    dashboard: "langsmith"
+    project: "research-agent-v1"
+    alert_if: tool_success_rate < 0.8
