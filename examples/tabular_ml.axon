@@ -1,0 +1,127 @@
+# ============================================================
+# Tabular ML — XGBoost / LightGBM / CatBoost Ensemble
+# Demonstrates: tabular blocks, feature engineering, SMOTE,
+# classification + regression, hyperparameter search,
+# Shapley explanations, and ensemble stacking.
+# ============================================================
+
+data CreditRisk:
+    source: "datasets/credit_risk.csv"
+    target: "default"
+    task: classification
+    split: 70/15/15
+    stratify: true
+    cat_features: [employment_type, home_ownership, loan_purpose, grade]
+    num_features: [age, income, loan_amount, dti, open_accounts,
+                   credit_utilization, derog_marks, months_since_last_delinq]
+    drop_features: [id, member_id]
+    missing: median_for_num_mode_for_cat
+
+feature CreditFeatures:
+    source: CreditRisk
+    transforms: [
+        Log1p(columns=[income, loan_amount]),
+        RatioFeature(loan_amount / income, name=debt_to_income_ratio),
+        BinFeature(age, bins=[18, 25, 35, 50, 65, 100], name=age_group),
+        TargetEncode(columns=[grade, loan_purpose], smoothing=20.0),
+        PolynomialFeatures(degree=2, columns=[dti, credit_utilization]),
+        StandardScaler(columns=@num_features)
+    ]
+    handle_imbalance: SMOTE(k_neighbors=5, sampling_ratio=0.5)
+
+# XGBoost classifier
+tabular XGBoostModel:
+    algorithm: xgboost
+    task: classification
+    data: CreditFeatures
+    params:
+        n_estimators: 1000
+        max_depth: 6
+        learning_rate: 0.05
+        subsample: 0.8
+        colsample_bytree: 0.8
+        min_child_weight: 5
+        gamma: 0.1
+        reg_alpha: 0.1
+        reg_lambda: 1.0
+        scale_pos_weight: 3.0
+    early_stopping_rounds: 50
+    eval_metric: auc
+    use_gpu: true
+
+# LightGBM classifier
+tabular LightGBMModel:
+    algorithm: lightgbm
+    task: classification
+    data: CreditFeatures
+    params:
+        num_leaves: 63
+        max_depth: -1
+        learning_rate: 0.05
+        n_estimators: 1000
+        min_child_samples: 20
+        subsample: 0.8
+        colsample_bytree: 0.8
+        reg_alpha: 0.1
+        reg_lambda: 1.0
+        class_weight: balanced
+    early_stopping_rounds: 50
+    eval_metric: auc
+    device: gpu
+
+# CatBoost classifier
+tabular CatBoostModel:
+    algorithm: catboost
+    task: classification
+    data: CreditRisk                   # CatBoost handles raw categoricals natively
+    params:
+        iterations: 1000
+        depth: 6
+        learning_rate: 0.05
+        l2_leaf_reg: 3.0
+        border_count: 254
+        cat_features: @CreditRisk.cat_features
+        auto_class_weights: SqrtBalanced
+    early_stopping_rounds: 50
+    eval_metric: AUC
+    task_type: GPU
+
+# Stacking ensemble
+ensemble CreditEnsemble:
+    base_models: [XGBoostModel, LightGBMModel, CatBoostModel]
+    meta_learner: LogisticRegression(C=1.0, max_iter=1000)
+    blending: true                     # hold-out blending (vs cross-val)
+    blend_fraction: 0.2
+    task: classification
+
+# Hyperparameter search on XGBoost
+search XGBoostHPO:
+    model: XGBoostModel
+    strategy: bayesian
+    n_trials: 100
+    metric: roc_auc
+    direction: maximize
+    cv_folds: 5
+    space:
+        max_depth: IntRange(3, 10)
+        learning_rate: LogUniform(0.01, 0.3)
+        subsample: Uniform(0.6, 1.0)
+        colsample_bytree: Uniform(0.6, 1.0)
+        min_child_weight: IntRange(1, 10)
+
+explain ShapExplanation:
+    model: CreditEnsemble
+    data: CreditRisk
+    method: shap
+    plot: [summary, waterfall, beeswarm, dependence(feature=dti)]
+    top_features: 20
+    save: "outputs/shap_credit_risk.html"
+
+evaluate CreditEvaluation:
+    model: CreditEnsemble
+    data: CreditRisk
+    split: test
+    metrics: [roc_auc, pr_auc, f1, precision, recall, brier_score, ks_statistic]
+    calibration_plot: true
+    confusion_matrix: true
+    threshold: 0.5
