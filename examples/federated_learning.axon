@@ -1,0 +1,122 @@
+# ============================================================
+# Federated Learning — Privacy-Preserving Distributed Training
+# Demonstrates: federated blocks, FedAvg / FedProx aggregation,
+# differential privacy, client heterogeneity, secure aggregation,
+# and non-IID data distribution handling.
+# ============================================================
+
+# Global shared dataset configuration (schema only — data stays on clients)
+data FederatedMedicalSchema:
+    task: classification
+    target: "diagnosis"
+    num_classes: 5
+    feature_dim: 256
+    input_type: tabular
+    # Note: actual data never leaves client devices
+
+# Client-side local dataset specification
+data ClientDataSpec:
+    format: csv
+    target: "diagnosis"
+    local_only: true                   # never transmitted to server
+    batch_size: 32
+    augment: [StandardScaler(), SMOTE(k_neighbors=3)]
+    min_samples: 100
+    max_samples: 10000
+
+# Global model architecture (shared with all clients)
+model GlobalDiagnosticModel:
+    type: mlp
+    architecture: [
+        Linear(256 -> 512), BatchNorm1d(512), ReLU(), Dropout(0.3),
+        Linear(512 -> 256), BatchNorm1d(256), ReLU(), Dropout(0.3),
+        Linear(256 -> 128), ReLU(),
+        Linear(128 -> 5)
+    ]
+    loss: CrossEntropy(label_smoothing=0.05)
+
+# Federated training configuration
+federated FedProxTraining:
+    global_model: GlobalDiagnosticModel
+    aggregation: fedprox               # FedProx vs FedAvg vs FedNova vs SCAFFOLD
+    mu: 0.01                           # FedProx proximal term
+
+    # Client configuration
+    clients:
+        num_total: 50                  # 50 hospitals
+        fraction_per_round: 0.3        # sample 30% per round = 15 hospitals
+        min_clients_per_round: 10
+        data_spec: ClientDataSpec
+        heterogeneity: non_iid         # Dirichlet distribution for label skew
+        dirichlet_alpha: 0.5           # lower = more heterogeneous
+
+    # Local training per client
+    local_training:
+        optimizer:
+            type: SGD
+            lr: 0.01
+            momentum: 0.9
+            weight_decay: 1.0e-4
+        local_epochs: 5
+        batch_size: 32
+        clip_local_updates: 10.0
+
+    # Differential privacy for client updates
+    privacy:
+        enabled: true
+        mechanism: gaussian
+        noise_multiplier: 0.5
+        max_grad_norm: 1.0             # per-sample gradient clipping
+        delta: 1.0e-5
+        target_epsilon: 8.0            # privacy budget
+
+    # Secure aggregation (prevents server from seeing individual updates)
+    secure_aggregation:
+        enabled: true
+        protocol: secagg_plus
+        dropout_resilience: 0.3       # handle 30% client dropout
+
+    communication:
+        compression: TopK(ratio=0.01)  # transmit only top 1% gradients
+        quantization: int8
+        encryption: tls
+
+    rounds: 200
+    convergence_check: every=10, patience=20
+    checkpoint_dir: "checkpoints/federated_medical"
+    server: FederatedServer(host="fed-server:8080", auth=mTLS)
+
+# Federated evaluation (on held-out server data)
+evaluate FederatedEvaluation:
+    model: FedProxTraining
+    server_eval_data: "datasets/held_out_validation.csv"  # small annotated set
+    metrics: [accuracy, macro_f1, per_class_auc, calibration_error]
+    eval_every: 10                     # rounds
+    client_local_eval: true            # also evaluate on local test sets
+
+# Fairness analysis across client hospitals
+evaluate FairnessAnalysis:
+    model: FedProxTraining
+    data: FederatedMedicalSchema
+    subgroups: [hospital_id, patient_age_group, patient_sex]
+    metrics: [accuracy, equalized_odds, demographic_parity, calibration]
+    fairness_threshold: 0.05           # max allowed disparity
+    save: "outputs/federated_fairness_report.json"
+
+# Compare against centralized baseline (if data were pooled)
+benchmark FedVsCentralized:
+    models:
+        federated: FedProxTraining
+        fedavg: federated(aggregation=fedavg)
+        local_only: no_aggregation
+    metrics: [accuracy, macro_f1, privacy_budget_epsilon, communication_mb]
+    num_rounds: 200
+    save: "outputs/federated_comparison.json"
+
+monitor FederatedMonitor:
+    watch: [global_loss, global_accuracy, round_duration_sec,
+            active_clients, privacy_epsilon_spent, communication_bytes]
+    log_every: round
+    dashboard: "wandb"
+    project: "federated-medical-dx"
+    alert_if: privacy_epsilon_spent > 8.0
