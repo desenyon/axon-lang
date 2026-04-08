@@ -1,0 +1,99 @@
+{
+  "name": "axon-language",
+  "displayName": "Axon Language",
+  "description": "Language support for the Axon ML Programming Language — syntax highlighting, completions, hover docs, diagnostics, and go-to-definition via the Axon LSP server.",
+  "version": "0.1.0",
+  "publisher": "axon-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "axon",
+    "machine learning",
+    "deep learning",
+    "pytorch",
+    "tensorflow",
+    "jax"
+  ],
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/axon-lang/axon"
+  },
+  "license": "MIT",
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "axon",
+        "aliases": [
+          "Axon",
+          "axon"
+        ],
+        "extensions": [
+          ".axon"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "axon",
+        "scopeName": "source.axon",
+        "path": "./syntaxes/axon.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "axon.restartServer",
+        "title": "Axon: Restart Language Server"
+      },
+      {
+        "command": "axon.showOutput",
+        "title": "Axon: Show Output Channel"
+      }
+    ],
+    "configuration": {
+      "title": "Axon",
+      "properties": {
+        "axon.serverPath": {
+          "type": "string",
+          "default": "axon",
+          "description": "Path to the Axon executable (must be on PATH or an absolute path)."
+        },
+        "axon.serverArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lsp"],
+          "description": "Arguments passed to the Axon LSP server."
+        },
+        "axon.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Axon language server."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onLanguage:axon"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.0.0"
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "echo 'No build step required'",
+    "package": "vsce package"
+  }
+}

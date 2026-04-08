@@ -1,0 +1,168 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Axon",
+  "scopeName": "source.axon",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#booleans" },
+    { "include": "#block-definitions" },
+    { "include": "#keywords" },
+    { "include": "#layer-names" },
+    { "include": "#optimizer-names" },
+    { "include": "#loss-names" },
+    { "include": "#properties" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.hash.axon",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.axon",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.axon", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.single.axon",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.axon", "match": "\\\\." }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.axon",
+          "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hex.axon",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.axon",
+          "match": "\\b[0-9]+([eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.axon",
+          "match": "\\b(true|false|none|null)\\b"
+        }
+      ]
+    },
+    "block-definitions": {
+      "patterns": [
+        {
+          "comment": "Block definition: keyword BlockName:",
+          "match": "^(model|data|train|evaluate|search|deploy|pipeline|finetune|ensemble|explain|pretrain|gan|diffusion|rl|tabular|timeseries|graph|audio|multimodal|distill|quantize|monitor|serve|test|benchmark|augment|feature|embedding|tokenizer|callback|metric|rag|agent|federated|automl)\\s+([A-Z][A-Za-z0-9_]*)\\s*:",
+          "captures": {
+            "1": { "name": "keyword.control.block.axon" },
+            "2": { "name": "entity.name.type.block.axon" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.axon",
+          "match": "\\b(model|data|train|evaluate|search|deploy|pipeline|finetune|ensemble|explain|pretrain|gan|diffusion|rl|tabular|timeseries|graph|audio|multimodal|distill|quantize|monitor|serve|test|benchmark|augment|feature|embedding|tokenizer|callback|metric|rag|agent|federated|automl)\\b"
+        },
+        {
+          "name": "keyword.other.import.axon",
+          "match": "\\b(import|from|as|python)\\b"
+        },
+        {
+          "name": "keyword.other.forward.axon",
+          "match": "\\b(forward|transform|loader|layers|optimizer|loss|epochs|device|metrics|callbacks|scheduler|split|source|format|backbone|pretrained)\\b"
+        }
+      ]
+    },
+    "layer-names": {
+      "patterns": [
+        {
+          "name": "support.class.layer.axon",
+          "match": "\\b(Linear|Dense|LazyLinear|Conv1d|Conv2d|Conv3d|ConvTranspose1d|ConvTranspose2d|ConvTranspose3d|DepthwiseConv2d|SeparableConv2d|LSTM|GRU|RNN|LSTMCell|GRUCell|MultiheadAttention|TransformerEncoder|TransformerDecoder|TransformerEncoderLayer|TransformerDecoderLayer|Transformer|BatchNorm1d|BatchNorm2d|BatchNorm3d|LayerNorm|GroupNorm|InstanceNorm1d|InstanceNorm2d|RMSNorm|MaxPool1d|MaxPool2d|MaxPool3d|AvgPool1d|AvgPool2d|AvgPool3d|AdaptiveAvgPool2d|GlobalAvgPool|ReLU|LeakyReLU|PReLU|ELU|SELU|GELU|Sigmoid|Tanh|Softmax|LogSoftmax|Mish|SiLU|Hardswish|Dropout|Dropout2d|AlphaDropout|SpatialDropout|Embedding|EmbeddingBag|Flatten|Unflatten|Identity|PixelShuffle|Upsample|Reshape)\\b"
+        }
+      ]
+    },
+    "optimizer-names": {
+      "patterns": [
+        {
+          "name": "support.class.optimizer.axon",
+          "match": "\\b(Adam|AdamW|SGD|RMSprop|Adagrad|Adadelta|Adamax|NAdam|RAdam|LBFGS|Rprop|Lion|Shampoo|Prodigy|Sophia)\\b"
+        }
+      ]
+    },
+    "loss-names": {
+      "patterns": [
+        {
+          "name": "support.class.loss.axon",
+          "match": "\\b(CrossEntropy|BCELoss|BCEWithLogitsLoss|MSELoss|L1Loss|SmoothL1Loss|HuberLoss|NLLLoss|KLDivLoss|CosineEmbeddingLoss|TripletMarginLoss|MarginRankingLoss|HingeEmbeddingLoss|MultiLabelSoftMarginLoss|MultiMarginLoss|PoissonNLLLoss|GaussianNLLLoss|SoftMarginLoss|FocalLoss|DiceLoss|IoULoss|CTC|ContrastiveLoss|InfoNCE|PerceptualLoss|WassersteinLoss)\\b"
+        }
+      ]
+    },
+    "properties": {
+      "patterns": [
+        {
+          "comment": "Property key: value",
+          "match": "^\\s+([a-z_][a-z_0-9]*)\\s*:",
+          "captures": {
+            "1": { "name": "variable.other.property.axon" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.axon",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.assignment.axon",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.colon.axon",
+          "match": ":"
+        },
+        {
+          "name": "keyword.operator.pipe.axon",
+          "match": "\\|"
+        },
+        {
+          "name": "keyword.operator.slash.axon",
+          "match": "/"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.identifier.axon",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}
