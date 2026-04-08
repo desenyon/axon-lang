@@ -190,6 +190,7 @@ class AxonLexer:
     Handles 40+ ML keywords, indentation-based scoping,
     tensor type annotations, parameter references, arrow expressions,
     ratio expressions, range expressions, and all Python-compatible literals.
+    Also supports YAML-style block scalars: |, |>, |-
     """
     
     def __init__(self, source: str):
@@ -201,16 +202,23 @@ class AxonLexer:
     
     def _tokenize(self):
         indent_stack = [0]
+        line_index = 0
+        lines = self.lines
         
-        for line_num, line in enumerate(self.lines, start=1):
+        while line_index < len(lines):
+            line_num = line_index + 1
+            line = lines[line_index]
             stripped = line.strip()
+            
             if not stripped or stripped.startswith("#"):
                 if stripped.startswith("#"):
                     self.tokens.append(Token(TokenType.COMMENT, stripped, line_num, 0))
+                line_index += 1
                 continue
             
             if stripped.startswith("@python"):
                 self.tokens.append(Token(TokenType.PYTHON_BLOCK, stripped, line_num, 0))
+                line_index += 1
                 continue
             
             indent = len(line) - len(line.lstrip())
@@ -225,14 +233,86 @@ class AxonLexer:
                         indent_stack.pop()
                         self.tokens.append(Token(TokenType.DEDENT, "", line_num, 0))
             
+            # Check for block scalar markers: |, |>, |-
+            # They appear at the end of a line (possibly after a colon+key)
+            # Pattern: the stripped line ends with |, |>, or |-
+            block_scalar_match = self._detect_block_scalar(stripped)
+            if block_scalar_match is not None:
+                scalar_type, prefix = block_scalar_match
+                # Emit the tokens before the block scalar marker
+                if prefix:
+                    self._tokenize_line(prefix.rstrip(), line_num)
+                # Collect the block content from subsequent indented lines
+                block_indent = None
+                content_lines = []
+                line_index += 1
+                while line_index < len(lines):
+                    next_line = lines[line_index]
+                    next_stripped = next_line.strip()
+                    if not next_stripped:  # blank line inside block
+                        content_lines.append("")
+                        line_index += 1
+                        continue
+                    next_indent = len(next_line) - len(next_line.lstrip())
+                    if block_indent is None:
+                        # First content line sets the base indent
+                        if next_indent > indent:
+                            block_indent = next_indent
+                        else:
+                            break  # no content
+                    if next_indent < block_indent:
+                        break  # dedent ends the block
+                    # Strip exactly block_indent spaces
+                    content_lines.append(next_line[block_indent:])
+                    line_index += 1
+                # Build the string value based on scalar type
+                if scalar_type == "folded":  # |>
+                    string_value = " ".join(l for l in content_lines if l)
+                elif scalar_type == "strip":  # |-
+                    combined = "\n".join(content_lines)
+                    string_value = combined.rstrip("\n")
+                else:  # | literal
+                    string_value = "\n".join(content_lines)
+                    if content_lines:
+                        string_value += "\n"
+                self.tokens.append(Token(TokenType.STRING, string_value, line_num, len(prefix) if prefix else 0))
+                self.tokens.append(Token(TokenType.NEWLINE, "\\n", line_num, len(stripped)))
+                continue
+            
             self._tokenize_line(stripped, line_num)
             self.tokens.append(Token(TokenType.NEWLINE, "\\n", line_num, len(stripped)))
+            line_index += 1
         
         while len(indent_stack) > 1:
             indent_stack.pop()
             self.tokens.append(Token(TokenType.DEDENT, "", len(self.lines), 0))
         
         self.tokens.append(Token(TokenType.EOF, "", len(self.lines), 0))
+    
+    def _detect_block_scalar(self, stripped: str):
+        """Check if a stripped line ends with a block scalar marker.
+        
+        Returns (scalar_type, prefix) or None.
+        scalar_type: 'literal', 'folded', or 'strip'
+        prefix: the part of the line before the marker
+        """
+        # Match: ends with |>, |-, or | (but not |- inside words)
+        # The marker must be standalone at end-of-line (after whitespace)
+        import re as _re
+        # Pattern: optional prefix, then whitespace, then the pipe marker
+        # The prefix must contain a colon (key: |) to be a block scalar context
+        # Or the entire line is just the marker
+        for marker, stype in [("|>", "folded"), ("|-", "strip"), ("|", "literal")]:
+            if stripped == marker:
+                return (stype, "")
+            if stripped.endswith(" " + marker) or stripped.endswith("\t" + marker):
+                prefix = stripped[:-(len(marker)+1)]
+                return (stype, prefix)
+            # Also match after colon: "key: |"
+            if stripped.endswith(":" + marker):
+                prefix = stripped[:-(len(marker))]
+                return (stype, prefix)
+        return None
     
     def _tokenize_line(self, line: str, line_num: int):
         i = 0
