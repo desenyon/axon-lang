@@ -1,0 +1,128 @@
+# ============================================================
+# Graph Neural Networks — Node & Graph Classification
+# Demonstrates: graph blocks, GCN, GAT, GraphSAGE,
+# message passing, pooling, molecular property prediction,
+# social network node classification, link prediction.
+# ============================================================
+
+# Social network node classification dataset
+data CoraDataset:
+    source: "datasets/cora"
+    format: graph
+    task: node_classification
+    num_nodes: 2708
+    num_edges: 10556
+    num_features: 1433
+    num_classes: 7
+    split: 140/500/1000                # train/val/test nodes
+    self_loops: true
+    normalize_features: true
+
+# Molecular graph dataset for property prediction
+data OGBMolHIV:
+    source: "ogb/ogbg-molhiv"
+    format: graph
+    task: graph_classification
+    num_features: 9                    # atom features
+    edge_features: 3                   # bond features
+    num_classes: 2
+    split: 80/10/10
+    augment: [RandomMaskAtoms(p=0.1), RandomDropEdges(p=0.1)]
+
+# Graph Convolutional Network
+graph GCNNodeClassifier:
+    architecture: gcn
+    data: CoraDataset
+    layers: [
+        GCNConv(1433 -> 256), ReLU(), Dropout(0.5),
+        GCNConv(256 -> 128), ReLU(), Dropout(0.5),
+        GCNConv(128 -> 7)
+    ]
+    residual_connections: true
+    batch_norm: true
+    activation: relu
+
+    optimizer:
+        type: Adam
+        lr: 0.01
+        weight_decay: 5.0e-4
+
+    loss: CrossEntropy()
+    epochs: 400
+    early_stopping: patience=50, monitor=val_accuracy
+
+# Graph Attention Network
+graph GATNodeClassifier:
+    architecture: gat
+    data: CoraDataset
+    layers: [
+        GATConv(1433 -> 64, heads=8, dropout=0.6),
+        ELU(),
+        GATConv(512 -> 7, heads=1, concat=false, dropout=0.6)
+    ]
+    input_dropout: 0.6
+
+    optimizer:
+        type: Adam
+        lr: 0.005
+        weight_decay: 5.0e-4
+
+    loss: CrossEntropy()
+    epochs: 400
+    early_stopping: patience=100, monitor=val_accuracy
+
+# GraphSAGE for graph-level classification
+graph GraphSAGEMolecule:
+    architecture: graphsage
+    data: OGBMolHIV
+    layers: [
+        SAGEConv(9 -> 256), BatchNorm1d(256), ReLU(),
+        SAGEConv(256 -> 256), BatchNorm1d(256), ReLU(),
+        SAGEConv(256 -> 256), BatchNorm1d(256), ReLU(),
+        SAGEConv(256 -> 256), BatchNorm1d(256), ReLU(),
+        SAGEConv(256 -> 256), BatchNorm1d(256), ReLU()
+    ]
+    edge_feature_encoder: Linear(3 -> 256)
+    aggregation: mean
+    pooling: global_mean_add           # combine mean and add pooling
+    head: [Linear(512 -> 256), ReLU(), Dropout(0.5), Linear(256 -> 2)]
+
+    optimizer:
+        type: Adam
+        lr: 0.001
+
+    loss: CrossEntropy()
+    epochs: 100
+    batch_size: 32
+
+# Link prediction on citation network
+graph LinkPredictionGCN:
+    architecture: gcn_link_pred
+    data: CoraDataset
+    encoder: GCNNodeClassifier         # reuse node embeddings
+    decoder: DotProduct()
+    negative_sampling: random
+    negative_ratio: 3
+    loss: BinaryCrossEntropy()
+    epochs: 200
+
+    optimizer:
+        type: Adam
+        lr: 0.01
+
+evaluate GNNEvaluation:
+    models: [GCNNodeClassifier, GATNodeClassifier, GraphSAGEMolecule]
+    metrics:
+        node_classification: [accuracy, macro_f1, micro_f1]
+        graph_classification: [roc_auc, accuracy]
+        link_prediction: [hits_at_10, hits_at_50, mrr]
+    plot_embeddings: TSNE(n_components=2, perplexity=30)
+    save: "outputs/gnn_results.json"
+
+explain GNNExplainer:
+    model: GATNodeClassifier
+    method: gnnexplainer
+    num_hops: 2
+    top_k_edges: 10
+    visualize: true
+    save: "outputs/gnn_explanations/"
