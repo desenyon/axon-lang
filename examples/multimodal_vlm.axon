@@ -1,0 +1,139 @@
+# ============================================================
+# Multimodal Vision-Language Model — CLIP + Image Captioning
+# Demonstrates: multimodal blocks, contrastive learning,
+# vision encoder + text encoder, cross-attention fusion,
+# zero-shot classification, and image captioning.
+# ============================================================
+
+data LAION400M:
+    source: "datasets/laion400m"
+    format: image_text_pairs
+    image_size: [224, 224]
+    text_max_length: 77
+    split: 99/0.5/0.5
+    filter_nsfw: true
+    min_image_size: 200
+    filter_aesthetic_score: 4.5
+    augment: [
+        RandomResizedCrop(size=224, scale=[0.9, 1.0]),
+        RandAugment(n=2, m=9),
+        ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1),
+        RandomGrayscale(p=0.2)
+    ]
+    batch_size: 4096
+    num_workers: 32
+
+data COCO_Captions:
+    source: "datasets/coco_captions"
+    format: image_text_pairs
+    image_size: [336, 336]
+    split: 80/10/10
+    captions_per_image: 5
+    batch_size: 64
+
+# Vision encoder (ViT-L/14)
+model VisionEncoder:
+    type: vit
+    image_size: 224
+    patch_size: 14
+    d_model: 1024
+    num_heads: 16
+    num_layers: 24
+    mlp_ratio: 4.0
+    dropout: 0.0
+    out_dim: 768                       # projected embedding dimension
+    projection: Linear(1024 -> 768)
+
+# Text encoder (GPT-style transformer)
+model TextEncoder:
+    type: transformer_encoder
+    vocab_size: 49408
+    context_length: 77
+    d_model: 768
+    num_heads: 12
+    num_layers: 12
+    out_dim: 768
+    projection: Linear(768 -> 768)
+    pooling: eot_token                 # use end-of-text token embedding
+
+# CLIP contrastive pre-training
+multimodal CLIPPretraining:
+    vision_encoder: VisionEncoder
+    text_encoder: TextEncoder
+    data: LAION400M
+    loss: InfoNCE(temperature=0.07, learnable_temp=true)
+    logit_scale_init: 14.3
+    normalize_embeddings: true
+
+    optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 0.2
+        betas: [0.9, 0.98]
+        eps: 1.0e-8
+
+    lr_schedule: cosine_with_warmup
+    warmup_steps: 10000
+    mixed_precision: bf16
+    gradient_clip: 1.0
+    batch_size: 4096
+    epochs: 32
+    checkpoint_dir: "checkpoints/clip_vitl14"
+
+# Image Captioning with cross-attention decoder
+model CaptioningDecoder:
+    type: autoregressive_transformer
+    d_model: 768
+    num_heads: 12
+    num_layers: 6
+    vocab_size: 49408
+    max_length: 77
+    cross_attention: true              # attends to visual tokens
+    cross_attention_every: 1          # every decoder layer
+
+# Fine-tune captioning on COCO
+finetune CLIPCaptioner:
+    vision_encoder: VisionEncoder     # frozen from CLIP
+    decoder: CaptioningDecoder
+    data: COCO_Captions
+    freeze: [vision_encoder]          # only train the decoder
+    task: image_captioning
+
+    optimizer:
+        type: AdamW
+        lr: 5.0e-5
+        weight_decay: 0.01
+        warmup_steps: 200
+
+    loss: CrossEntropy(label_smoothing=0.1)
+    generation: BeamSearch(num_beams=5, max_new_tokens=50)
+    mixed_precision: fp16
+    epochs: 20
+    checkpoint_dir: "checkpoints/clip_captioner_coco"
+
+# Zero-shot image classification probe
+evaluate ZeroShotCLIP:
+    model: CLIPPretraining
+    datasets: [ImageNet1K, CIFAR100, Food101, SUN397, DTD]
+    task: zero_shot_classification
+    prompt_templates: [
+        "a photo of a {classname}",
+        "a photograph of a {classname}",
+        "an image of a {classname}",
+        "a picture showing {classname}"
+    ]
+    ensemble_prompts: true
+    metrics: [top1_accuracy, top5_accuracy]
+
+evaluate CaptioningEval:
+    model: CLIPCaptioner
+    data: COCO_Captions
+    split: test
+    metrics: [bleu_4, meteor, rouge_l, cider, spice]
+    save: "outputs/captioning_results.json"
+
+monitor MultimodalMonitor:
+    watch: [contrastive_loss, image_text_accuracy, bleu_4, cider]
+    log_every: 500
+    dashboard: "wandb"
+    project: "clip-captioning-coco"
