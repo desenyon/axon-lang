@@ -1,0 +1,120 @@
+# ============================================================
+# Reinforcement Learning — PPO + DQN for Game Playing
+# Demonstrates: rl blocks, multiple environments, actor-critic,
+# replay buffers, epsilon-greedy exploration, reward shaping,
+# curriculum training, and policy evaluation.
+# ============================================================
+
+# Atari environment wrapper for DQN
+data AtariEnv:
+    source: gym
+    env_id: "ALE/Breakout-v5"
+    num_envs: 16                       # parallel environments
+    frame_stack: 4
+    frame_skip: 4
+    grayscale: true
+    resize: [84, 84]
+    reward_clip: [-1.0, 1.0]
+    episodic_life: true
+    fire_reset: true
+
+# Continuous control environment for PPO
+data MuJoCoEnv:
+    source: gym
+    env_id: "HalfCheetah-v4"
+    num_envs: 32
+    normalize_obs: true
+    normalize_rewards: true
+    reward_scale: 1.0
+    max_episode_steps: 1000
+
+# DQN network for discrete action Atari
+model DQNNetwork:
+    type: cnn_mlp
+    input_channels: 4                  # stacked frames
+    conv_layers: [
+        Conv2d(4 -> 32, kernel=8, stride=4), ReLU(),
+        Conv2d(32 -> 64, kernel=4, stride=2), ReLU(),
+        Conv2d(64 -> 64, kernel=3, stride=1), ReLU()
+    ]
+    fc_layers: [Linear(3136 -> 512), ReLU(), Linear(512 -> 4)]
+    dueling: true                      # dueling architecture
+    noisy_nets: false
+
+# Actor-Critic network for PPO on continuous control
+model ActorCritic:
+    type: mlp
+    obs_dim: 17                        # HalfCheetah observation
+    action_dim: 6                      # HalfCheetah action
+    shared_layers: [Linear(17 -> 256), Tanh(), Linear(256 -> 256), Tanh()]
+    actor_head: [Linear(256 -> 6)]     # mean of Gaussian policy
+    critic_head: [Linear(256 -> 1)]
+    log_std_init: -0.5
+
+# Deep Q-Network training
+rl DQNTraining:
+    algorithm: dqn
+    model: DQNNetwork
+    target_model: DQNNetwork           # separate target network
+    env: AtariEnv
+
+    replay_buffer_size: 1000000
+    min_replay_size: 50000
+    batch_size: 32
+    gamma: 0.99
+    tau: 0.005                         # soft target update rate
+    update_every: 4
+    target_update_every: 1000
+
+    exploration:
+        strategy: epsilon_greedy
+        eps_start: 1.0
+        eps_end: 0.1
+        eps_decay_steps: 1000000
+
+    optimizer:
+        type: Adam
+        lr: 0.0001
+
+    total_steps: 10000000
+    eval_every: 100000
+    checkpoint_dir: "checkpoints/dqn_breakout"
+
+# Proximal Policy Optimization training
+rl PPOTraining:
+    algorithm: ppo
+    model: ActorCritic
+    env: MuJoCoEnv
+
+    rollout_steps: 2048               # steps before each update
+    num_epochs: 10
+    num_minibatches: 32
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_ratio: 0.2
+    entropy_coef: 0.0
+    value_loss_coef: 0.5
+    max_grad_norm: 0.5
+    normalize_advantages: true
+
+    optimizer:
+        type: Adam
+        lr: 3.0e-4
+        eps: 1.0e-5
+
+    lr_schedule: linear_decay
+    total_timesteps: 5000000
+    eval_episodes: 10
+    eval_every: 50000
+    checkpoint_dir: "checkpoints/ppo_halfcheetah"
+
+metric RLMetrics:
+    track: [episode_reward, episode_length, value_loss, policy_loss,
+            entropy, approx_kl, explained_variance]
+    window: 100                        # rolling average window
+
+monitor RLDashboard:
+    watch: [episode_reward_mean, episode_reward_min, episode_reward_max]
+    log_every: 1000
+    dashboard: "wandb"
+    project: "atari-mujoco-rl"
