@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "axon-ml"
+version = "2.0.0"
+description = "A comprehensive programming language for ML/AI built on Python — 35 block types, 3 backends, 50+ library integrations"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Axon Language Project"}
+]
+keywords = [
+    "machine-learning", "deep-learning", "dsl", "programming-language",
+    "pytorch", "tensorflow", "jax", "mlops", "ai",
+    "reinforcement-learning", "gan", "diffusion", "transformers",
+    "computer-vision", "nlp", "audio", "graph-neural-networks",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Compilers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "numpy",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+# Core backends
+pytorch = [
+    "torch>=2.0",
+    "torchvision",
+    "torchaudio",
+]
+tensorflow = ["tensorflow>=2.15"]
+jax = ["jax[cpu]", "flax", "optax"]
+
+# Domain-specific
+tabular = ["xgboost", "lightgbm", "catboost", "scikit-learn"]
+timeseries = ["prophet", "statsmodels", "pytorch-forecasting"]
+graph = ["torch-geometric", "torch-scatter", "torch-sparse"]
+audio = ["torchaudio", "librosa", "soundfile"]
+rl = ["stable-baselines3[extra]", "gymnasium"]
+diffusion = ["diffusers", "accelerate"]
+generative = ["diffusers", "accelerate"]
+
+# NLP & LLM
+huggingface = ["transformers", "peft", "datasets", "tokenizers", "accelerate"]
+rag = ["langchain", "langchain-community", "faiss-cpu", "chromadb", "sentence-transformers"]
+agents = ["langchain", "langchain-community"]
+
+# MLOps
+experiment = ["optuna", "wandb", "mlflow"]
+monitoring = ["wandb", "mlflow", "tensorboard", "neptune"]
+deploy = ["onnx", "onnxruntime", "fastapi", "uvicorn", "gradio"]
+serving = ["fastapi", "uvicorn", "gradio", "streamlit", "tritonclient"]
+
+# Model optimization
+explain = ["shap", "lime", "captum"]
+quantize = ["bitsandbytes", "auto-gptq", "autoawq"]
+federated = ["flwr"]
+automl = ["autogluon", "flaml"]
+
+# Augmentation
+augmentation = ["albumentations", "audiomentations", "nlpaug"]
+
+# Everything
+all = [
+    "torch>=2.0", "torchvision", "torchaudio",
+    "tensorflow>=2.15",
+    "jax[cpu]", "flax", "optax",
+    "scikit-learn", "xgboost", "lightgbm", "catboost",
+    "transformers", "peft", "datasets", "tokenizers", "accelerate",
+    "diffusers", "sentence-transformers",
+    "stable-baselines3[extra]", "gymnasium",
+    "optuna", "wandb", "mlflow", "tensorboard",
+    "onnx", "onnxruntime", "fastapi", "uvicorn", "gradio",
+    "shap", "lime", "captum",
+    "langchain", "faiss-cpu", "chromadb",
+    "albumentations",
+    "librosa",
+    "flwr",
+]
+
+[project.scripts]
+axon = "cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["axon*", "cli*"]
