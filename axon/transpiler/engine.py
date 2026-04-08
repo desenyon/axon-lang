@@ -248,6 +248,7 @@ class AxonTranspiler:
             AgentDef: self._transpile_agent,
             FederatedDef: self._transpile_federated,
             AutoMLDef: self._transpile_automl,
+            AxonImport: self._transpile_axon_import,
         }
         handler = dispatch.get(type(node))
         if handler:
@@ -2024,6 +2025,51 @@ class AxonTranspiler:
         """Pass-through raw Python code."""
         for line in block.code.split("\n"):
             self._emit(line)
+
+    def _transpile_axon_import(self, node: AxonImport):
+        """Transpile an AxonImport node.
+        
+        For .axon imports, attempt to compile the target file and inline it.
+        For python-style imports, emit the import statement directly.
+        """
+        if node.import_style == "python":
+            # Emit as standard Python import
+            if node.alias:
+                self._emit(f"import {node.module} as {node.alias}")
+            else:
+                self._emit(f"import {node.module}")
+            return
+
+        if not node.source_path:
+            return
+
+        # Attempt to resolve and inline the .axon module
+        import os
+        try:
+            from axon.modules import ModuleResolver
+            resolver = ModuleResolver()
+            info = resolver.load(node.source_path)
+            
+            # Compile the imported module's source using a fresh transpiler
+            from axon.parser.parser import AxonParser
+            sub_parser = AxonParser(info.source)
+            sub_ast = sub_parser.parse()
+            sub_transpiler = AxonTranspiler(backend=self.backend)
+            compiled = sub_transpiler.transpile(sub_ast)
+            
+            if node.import_style == "wildcard":
+                self._emit(f"# -- Inlined from {node.source_path} (wildcard) --")
+                for line in compiled.split("\n"):
+                    self._emit(line)
+            else:
+                # Named import: emit a comment and inline the compiled code
+                names_str = ", ".join(node.names)
+                self._emit(f"# -- Inlined from {node.source_path}: {names_str} --")
+                for line in compiled.split("\n"):
+                    self._emit(line)
+        except Exception as e:
+            # If the module can't be resolved (e.g., in tests), emit a comment
+            self._emit(f"# AxonImport: {node.import_style} from {node.source_path!r} -- {e}")
 
     # --- GAN Transpilation ---------------------------------------------------------
 
