@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "axon-ml"
-version = "2.0.0"
+version = "0.1.2"
 description = "A comprehensive programming language for ML/AI built on Python — 35 block types, 3 backends, 50+ library integrations"
 readme = "README.md"
 license = {text = "MIT"}

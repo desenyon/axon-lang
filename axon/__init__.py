@@ -19,7 +19,7 @@ Backends: PyTorch, TensorFlow, JAX
 Libraries: 50+ Python ML libraries supported
 """
 
-__version__ = "2.0.0"
+__version__ = "0.1.2"
 __author__ = "Axon Language Project"
 
 from axon.transpiler.engine import AxonTranspiler
