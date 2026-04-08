@@ -128,6 +128,16 @@ class AxonParser:
             self.advance()
             return None
         
+        # Check plugin registry for custom block types before raising
+        try:
+            from axon.plugins import PluginRegistry
+            _registry = PluginRegistry()
+            _plugin_parser = _registry.get_block_parser(token.value)
+            if _plugin_parser:
+                return _plugin_parser(token.value, self)
+        except Exception:
+            pass
+
         raise ParseError(f"Unexpected token '{token.value}' ({token.type.name}) — expected a block keyword (model, data, train, etc.)", token)
     
     # ─── Value Parsing ─────────────────────────────────────────
@@ -956,8 +966,119 @@ class AxonParser:
         code = token.value.replace("@python:", "").strip()
         return PythonBlock(code=code)
     
-    def _parse_import(self) -> PythonBlock:
+    def _parse_import(self):
+        """Parse import statements.
+        
+        Handles:
+          import Model from "./other.axon"            -> AxonImport named
+          import { Model, DataLoader } from "..."    -> AxonImport named (destructured)
+          import * from "./all.axon"                 -> AxonImport wildcard
+          import numpy                               -> PythonBlock (legacy)
+          import numpy as np                         -> PythonBlock (legacy)
+          from x import y                            -> PythonBlock (legacy)
+        """
+        start_token = self.peek()
+        
+        # FROM-style: `from ... import ...`
+        if start_token.type == TokenType.FROM:
+            tokens = []
+            while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                tokens.append(self.advance().value)
+            return PythonBlock(code=" ".join(tokens))
+        
+        # IMPORT-style
+        self.advance()  # consume 'import'
+        
+        # Wildcard: import * from "path"
+        if self.peek().type == TokenType.STAR:
+            self.advance()  # consume '*'
+            # expect 'from'
+            if self.peek().type == TokenType.FROM:
+                self.advance()  # consume 'from'
+                path_token = self.peek()
+                if path_token.type == TokenType.STRING:
+                    self.advance()
+                    return AxonImport(
+                        import_style="wildcard",
+                        names=[],
+                        source_path=path_token.value,
+                        line=start_token.line, col=start_token.col
+                    )
+            # Fallback: emit as python import
+            return PythonBlock(code="import *")
+        
+        # Destructured: import { Model, DataLoader } from "path"
+        if self.peek().type == TokenType.LBRACE:
+            self.advance()  # consume '{'
+            names = []
+            while self.peek().type not in (TokenType.RBRACE, TokenType.EOF):
+                if self.peek().type == TokenType.COMMA:
+                    self.advance()
+                    continue
+                names.append(self.advance().value)
+            if self.peek().type == TokenType.RBRACE:
+                self.advance()  # consume '}'
+            # expect 'from'
+            if self.peek().type == TokenType.FROM:
+                self.advance()
+                path_token = self.peek()
+                if path_token.type == TokenType.STRING:
+                    self.advance()
+                    return AxonImport(
+                        import_style="named",
+                        names=names,
+                        source_path=path_token.value,
+                        line=start_token.line, col=start_token.col
+                    )
+            return PythonBlock(code="import { " + ", ".join(names) + " }")
+        
+        # Named or python-style: collect first identifier
+        if self.peek().type in (TokenType.IDENTIFIER,) or self.peek().type.name in (
+            "IDENTIFIER", "MODEL", "DATA", "TRAIN", "EVALUATE", "SEARCH", "DEPLOY",
+            "PIPELINE", "TRANSFORM", "PRETRAIN", "FINETUNE", "ENSEMBLE", "EXPLAIN",
+            "FORWARD", "GAN", "DIFFUSION", "RL", "TABULAR", "TIMESERIES", "GRAPH",
+            "AUDIO", "MULTIMODAL", "DISTILL", "QUANTIZE", "MONITOR", "SERVE", "TEST",
+            "BENCHMARK", "AUGMENT", "FEATURE", "EMBEDDING", "TOKENIZER", "CALLBACK",
+            "METRIC", "RAG", "AGENT", "FEDERATED", "AUTOML"
+        ):
+            first_name = self.advance().value
+            
+            # Check for: import Name from "path"
+            if self.peek().type == TokenType.FROM:
+                self.advance()  # consume 'from'
+                path_token = self.peek()
+                if path_token.type == TokenType.STRING:
+                    self.advance()
+                    return AxonImport(
+                        import_style="named",
+                        names=[first_name],
+                        source_path=path_token.value,
+                        line=start_token.line, col=start_token.col
+                    )
+            
+            # Check for: import name as alias  (python-style)
+            if self.peek().type == TokenType.AS:
+                self.advance()  # consume 'as'
+                alias = self.advance().value if self.peek().type != TokenType.NEWLINE else None
+                # Consume rest of line
+                while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                    self.advance()
+                return AxonImport(
+                    import_style="python",
+                    names=[first_name],
+                    module=first_name,
+                    alias=alias,
+                    line=start_token.line, col=start_token.col
+                )
+            
+            # Collect rest as python import
+            rest = [first_name]
+            while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                rest.append(self.advance().value)
+            return PythonBlock(code="import " + " ".join(rest))
+        
+        # Fallback: collect everything as raw python import
         tokens = []
-        while self.peek().type != TokenType.NEWLINE and self.peek().type != TokenType.EOF:
+        while self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
             tokens.append(self.advance().value)
-        return PythonBlock(code=" ".join(tokens))
+        return PythonBlock(code="import " + " ".join(tokens))

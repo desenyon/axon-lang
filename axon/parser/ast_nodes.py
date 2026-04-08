@@ -736,3 +736,24 @@ class Program(ASTNode):
     imports: list = field(default_factory=list)
     definitions: list = field(default_factory=list)
     config: dict = field(default_factory=dict)
+
+
+# ═══════════════════════════════════════════════════════════════
+# MODULE SYSTEM (IMPORTS)
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class AxonImport(ASTNode):
+    """Represents an import statement in Axon.
+    
+    Supports:
+      import Model from "./other.axon"         -> import_style='named', names=['Model']
+      import { Model, DataLoader } from "..."  -> import_style='named', names=[...]
+      import * from "./all.axon"               -> import_style='wildcard'
+      import numpy as np                       -> import_style='python', module='numpy', alias='np'
+    """
+    import_style: str = "named"   # 'named' | 'wildcard' | 'python'
+    names: list = field(default_factory=list)   # list of str names to import
+    source_path: Optional[str] = None           # './path/to/file.axon'
+    module: str = ""                            # for python-style imports
+    alias: Optional[str] = None                 # 'as' alias
