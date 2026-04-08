@@ -1,0 +1,69 @@
+# ================================================================
+# Axon Example: Generative AI - Autoregressive Pretraining
+# ================================================================
+# Build and pretrain a small language model from scratch,
+# then fine-tune for a downstream task
+
+# ── Transformer Model ─────────────────────────────────────────
+
+model MiniGPT:
+    embedding: Embedding(50257, 768)
+    transformer: Transformer(d_model=768, nhead=12, num_encoder_layers=6)
+    ln: LayerNorm(768)
+    lm_head: Linear(768 -> 50257)
+
+# ── Data ───────────────────────────────────────────────────────
+
+data TextCorpus:
+    source: "./data/corpus"
+    format: csv
+    split: 90/5/5
+    
+    loader:
+        batch_size: 8
+        shuffle: true
+        num_workers: 4
+
+# ── Pretraining ────────────────────────────────────────────────
+
+pretrain GPTPretraining:
+    model: MiniGPT
+    objective: autoregressive
+    data: TextCorpus
+
+# ── Fine-tuning ────────────────────────────────────────────────
+
+finetune GPTClassifier:
+    base_model: "gpt2"
+    method: lora
+    r: 8
+    alpha: 16
+    dropout: 0.1
+
+# ── Training ───────────────────────────────────────────────────
+
+train GPTTraining:
+    model: MiniGPT()
+    data: TextCorpus()
+    
+    optimizer: AdamW(lr=6e-4, weight_decay=0.1)
+    scheduler: CosineAnnealing(T_max=100)
+    loss: CrossEntropy
+    
+    epochs: 100
+    device: auto
+    precision: fp16
+    
+    metrics:
+        accuracy
+
+# ── Deploy ─────────────────────────────────────────────────────
+
+deploy GPTModel:
+    checkpoint: "best"
+    format: torchscript
+    optimize: true
+    
+    serve:
+        framework: fastapi
+        endpoint: "/generate"
