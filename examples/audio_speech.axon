@@ -1,0 +1,142 @@
+# ============================================================
+# Audio & Speech — ASR, Audio Classification, TTS
+# Demonstrates: audio blocks, Whisper fine-tuning,
+# mel spectrogram features, audio classification,
+# text-to-speech synthesis, and voice activity detection.
+# ============================================================
+
+data LibriSpeech:
+    source: "datasets/librispeech"
+    subset: ["train-clean-100", "train-clean-360", "train-other-500"]
+    format: audio
+    sample_rate: 16000
+    language: en
+    split: 960h/5h/5h
+    max_audio_length: 30               # seconds
+    text_col: transcript
+    augment: [
+        AddGaussianNoise(snr_range=[5, 20]),
+        TimeStretch(rate_range=[0.9, 1.1]),
+        PitchShift(semitones_range=[-2, 2]),
+        RoomSimulator(p=0.3)
+    ]
+
+data AudioSetClassification:
+    source: "datasets/audioset"
+    format: audio
+    sample_rate: 16000
+    num_classes: 527
+    split: 80/10/10
+    clip_duration: 10                  # seconds
+    multi_label: true
+
+feature MelSpecFeatures:
+    source: LibriSpeech
+    transform: MelSpectrogram(
+        n_fft=400,
+        hop_length=160,
+        n_mels=80,
+        f_min=0,
+        f_max=8000
+    )
+    normalize: per_utterance_mean_var
+    spec_augment: SpecAugment(
+        freq_mask_param=27,
+        time_mask_param=100,
+        num_freq_masks=2,
+        num_time_masks=2
+    )
+
+# Fine-tune Whisper for ASR
+finetune WhisperASR:
+    base_model: "openai/whisper-large-v3"
+    data: MelSpecFeatures
+    task: automatic_speech_recognition
+    language: en
+    freeze_encoder_layers: 12          # fine-tune only top 12 encoder + decoder
+    max_label_length: 448
+
+    optimizer:
+        type: AdamW
+        lr: 5.0e-5
+        weight_decay: 0.01
+        warmup_steps: 500
+
+    loss: CrossEntropy(label_smoothing=0.1)
+    mixed_precision: fp16
+    gradient_checkpointing: true
+    gradient_accumulation_steps: 2
+    batch_size: 16
+    epochs: 10
+    evaluation_strategy: steps
+    eval_steps: 1000
+    checkpoint_dir: "checkpoints/whisper_finetuned"
+
+# Audio classification with CNN
+audio AudioClassifier:
+    architecture: panns_cnn14          # Pre-trained Audio Neural Networks
+    pretrained: true
+    data: AudioSetClassification
+    input: MelSpectrogram(n_mels=128, n_fft=1024, hop_length=320)
+    pool: attention_pooling
+    head: [Linear(2048 -> 512), ReLU(), Dropout(0.5), Linear(512 -> 527)]
+    activation: sigmoid                # multi-label
+    loss: BinaryCrossEntropy()
+
+    optimizer:
+        type: AdamW
+        lr: 0.001
+        weight_decay: 1.0e-4
+
+    lr_schedule: CosineAnnealing(T_max=50)
+    epochs: 50
+    checkpoint_dir: "checkpoints/audio_classifier"
+
+# Text-to-Speech with VITS
+audio VITSTextToSpeech:
+    architecture: vits
+    pretrained: "tts_models/en/ljspeech/vits"
+    task: tts
+    sample_rate: 22050
+    channels: 1
+    speaker_embedding_dim: 256
+    multi_speaker: false
+
+    text_encoder:
+        type: transformer
+        d_model: 192
+        num_heads: 2
+        num_layers: 6
+
+    vocoder:
+        type: hifigan
+        pretrained: true
+
+    optimizer:
+        type: AdamW
+        lr: 2.0e-4
+
+    epochs: 1000
+    checkpoint_dir: "checkpoints/vits_tts"
+
+# Voice Activity Detection
+audio VADModel:
+    architecture: silero_vad
+    pretrained: true
+    sample_rate: 16000
+    threshold: 0.5
+    min_speech_duration: 0.25         # seconds
+    max_silence_duration: 0.1
+
+evaluate SpeechEvaluation:
+    models: [WhisperASR, AudioClassifier, VITSTextToSpeech]
+    metrics:
+        asr: [wer, cer, rtf]
+        classification: [map, auc_roc, d_prime]
+        tts: [mos_score, wv_mos, mel_cepstral_distortion]
+
+monitor SpeechMonitor:
+    watch: [wer, map, training_loss, val_loss, learning_rate]
+    log_every: 500
+    dashboard: "wandb"
+    project: "audio-speech-pipeline"
