@@ -1,0 +1,100 @@
+# ============================================================
+# Diffusion Model — DDPM for Image Synthesis
+# Demonstrates: diffusion blocks, U-Net noise predictor,
+# DDPM / DDIM schedulers, classifier-free guidance,
+# EMA weights, FID evaluation, and image sampling.
+# ============================================================
+
+data ImageNet64:
+    source: "datasets/imagenet64"
+    format: image
+    image_size: [64, 64]
+    channels: 3
+    split: 99/0.5/0.5
+    normalize: [-1.0, 1.0]
+    augment: [RandomHorizontalFlip(p=0.5), RandAugment(n=2, m=9)]
+    batch_size: 256
+    num_workers: 16
+    pin_memory: true
+
+# U-Net backbone for noise prediction
+model UNetNoisePredictor:
+    type: unet
+    in_channels: 3
+    out_channels: 3
+    base_channels: 128
+    channel_multipliers: [1, 2, 3, 4]
+    attention_resolutions: [16, 8]
+    num_res_blocks: 2
+    dropout: 0.1
+    time_embedding_dim: 512
+    num_classes: 1000                  # for class-conditional generation
+    use_scale_shift_norm: true
+    resample_with_conv: true
+
+# DDPM noise scheduler
+diffusion DDPMScheduler:
+    backbone: UNetNoisePredictor
+    data: ImageNet64
+    noise_schedule: cosine             # cosine vs linear
+    timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    predict_target: epsilon            # predict noise (epsilon) vs x0
+
+    # Classifier-free guidance
+    guidance_scale: 7.5
+    unconditional_prob: 0.1            # 10% of training uses null conditioning
+
+    # EMA for stable sampling
+    ema_decay: 0.9999
+    ema_update_every: 10
+
+    optimizer:
+        type: AdamW
+        lr: 0.0002
+        weight_decay: 0.01
+        warmup_steps: 5000
+
+    lr_schedule: cosine_annealing
+    gradient_clip: 1.0
+    mixed_precision: fp16
+    epochs: 500
+    checkpoint_dir: "checkpoints/ddpm_imagenet64"
+
+# DDIM fast sampler (subset of timesteps for inference)
+model DDIMSampler:
+    type: ddim
+    base: DDPMScheduler
+    num_inference_steps: 50            # vs 1000 for DDPM
+    eta: 0.0                           # deterministic sampling
+    guidance_scale: 7.5
+
+metric FIDScore:
+    type: frechet_inception_distance
+    num_samples: 50000
+    inception_dims: 2048
+    device: cuda
+
+metric ISScore:
+    type: inception_score
+    num_samples: 50000
+    splits: 10
+
+callback DiffusionMonitor:
+    trigger: epoch_end
+    every: 10
+    actions: [
+        SampleImages(sampler=DDIMSampler, n=64, classes=[0,1,2,3,4,5,6,7],
+                     save="outputs/diffusion/epoch_{epoch}.png"),
+        ComputeMetric(FIDScore),
+        ComputeMetric(ISScore),
+        SaveCheckpoint(keep_last=5, keep_best=metric="fid_score", mode=min)
+    ]
+
+monitor DiffusionHealth:
+    watch: [loss_mse, fid_score, is_score, learning_rate, grad_norm]
+    log_every: 200
+    dashboard: "wandb"
+    project: "imagenet64-ddpm"
+    tags: ["ddpm", "classifier-free-guidance", "imagenet64"]
