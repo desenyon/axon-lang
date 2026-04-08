@@ -1,0 +1,130 @@
+# ============================================================
+# AutoML Pipeline — Automated Feature Engineering + Model Selection
+# Demonstrates: automl blocks, feature selection, NAS-style
+# architecture search, multi-objective optimization, model
+# comparison, and automated report generation.
+# ============================================================
+
+data ChurnDataset:
+    source: "datasets/telecom_churn.csv"
+    target: "churned"
+    task: classification
+    split: 70/15/15
+    stratify: true
+    id_col: customer_id
+    drop_cols: [customer_id, phone_number]
+
+# Automated feature engineering
+feature AutoFeatureEngineering:
+    source: ChurnDataset
+    time_budget: 1800                  # 30 minutes for feature generation
+
+    generators: [
+        # Numeric transformations
+        NumericTransforms(ops=[log1p, sqrt, square, reciprocal]),
+        # Interaction features
+        CrossFeatures(max_degree=2, selection=mutual_info),
+        # Aggregations on grouped data
+        GroupAggregations(group_cols=[state, area_code],
+                          agg_cols=[total_day_minutes, total_eve_minutes],
+                          aggs=[mean, std, min, max]),
+        # Polynomial features
+        PolynomialFeatures(degree=2, include_bias=false, top_n=50)
+    ]
+
+    selection:
+        method: boruta
+        max_iter: 100
+        alpha: 0.05
+        importance: shap
+
+    encode_categoricals: TargetEncoder(smoothing=10.0)
+    scale_numerics: RobustScaler()
+    handle_missing: IterativeImputer(max_iter=10)
+
+# AutoML model search
+automl ChurnAutoML:
+    data: AutoFeatureEngineering
+    task: classification
+    metric: roc_auc
+    direction: maximize
+
+    search_space: [
+        LogisticRegression,
+        RandomForest,
+        GradientBoosting,
+        XGBoost,
+        LightGBM,
+        CatBoost,
+        SVM,
+        KNN,
+        NaiveBayes,
+        MLP
+    ]
+
+    # Bayesian optimization over hyperparameters
+    optimizer:
+        type: optuna
+        n_trials: 200
+        pruner: HyperbandPruner(min_resource=5, max_resource=100, reduction_factor=3)
+        sampler: TPESampler(n_startup_trials=30)
+
+    resampling: StratifiedKFold(n_splits=5)
+    time_budget: 7200                  # 2 hours total
+    n_jobs: -1                         # use all CPU cores
+    early_stopping_rounds: 20
+
+    ensemble:
+        method: portfolio              # build from top-k diverse models
+        max_models: 25
+        stacking_cv: 5
+        meta_learner: LogisticRegression
+
+# Multi-objective search: maximize AUC, minimize inference latency
+search MultiObjectiveSearch:
+    model: ChurnAutoML
+    objectives:
+        primary: roc_auc(direction=maximize, weight=0.7)
+        secondary: inference_latency_ms(direction=minimize, weight=0.3)
+    strategy: NSGA-II
+    n_trials: 100
+    pareto_front: true
+    plot_pareto: "outputs/pareto_front.html"
+
+# Neural architecture search (for the MLP component)
+search NASMlpSearch:
+    architecture: mlp
+    data: AutoFeatureEngineering
+    search_space:
+        num_layers: IntRange(1, 6)
+        hidden_dim: Categorical([64, 128, 256, 512])
+        activation: Categorical([relu, gelu, silu])
+        dropout: Uniform(0.0, 0.5)
+        batch_norm: Categorical([true, false])
+    strategy: bayesian
+    n_trials: 50
+    metric: roc_auc
+    cv_folds: 3
+
+evaluate AutoMLEvaluation:
+    model: ChurnAutoML
+    data: ChurnDataset
+    split: test
+    metrics: [roc_auc, pr_auc, f1, precision, recall, accuracy, brier_score]
+    compare_baseline: DummyClassifier(strategy=stratified)
+    significance_test: McNemar(alpha=0.05)
+
+explain AutoMLExplain:
+    model: ChurnAutoML
+    data: ChurnDataset
+    methods: [shap, permutation_importance, partial_dependence]
+    top_features: 20
+    auto_report: true
+    report_format: html
+    save: "outputs/automl_churn_report.html"
+
+monitor AutoMLMonitor:
+    watch: [trial_roc_auc, trial_latency, best_roc_auc, n_trials_completed]
+    dashboard: "optuna-dashboard"
+    storage: "sqlite:///automl_study.db"
+    study_name: "churn_automl_v1"
