@@ -1,0 +1,99 @@
+# ============================================================
+# GAN Image Generation — DCGAN + WGAN-GP
+# Demonstrates: gan blocks, discriminator/generator architecture,
+# gradient penalty, progressive training, monitoring callbacks,
+# FID evaluation, and image export.
+# ============================================================
+
+data CelebAFaces:
+    source: "datasets/celeba"
+    format: image
+    image_size: [64, 64]
+    channels: 3
+    split: 90/5/5
+    normalize: [-1.0, 1.0]
+    augment: [RandomHorizontalFlip(p=0.5)]
+    batch_size: 128
+    num_workers: 8
+    pin_memory: true
+
+# Deep Convolutional GAN generator
+model DCGANGenerator:
+    type: generator
+    latent_dim: 128
+    architecture: [
+        ConvTranspose2d(128 -> 512, kernel=4, stride=1, padding=0),
+        BatchNorm2d(512), ReLU(),
+        ConvTranspose2d(512 -> 256, kernel=4, stride=2, padding=1),
+        BatchNorm2d(256), ReLU(),
+        ConvTranspose2d(256 -> 128, kernel=4, stride=2, padding=1),
+        BatchNorm2d(128), ReLU(),
+        ConvTranspose2d(128 -> 64, kernel=4, stride=2, padding=1),
+        BatchNorm2d(64), ReLU(),
+        ConvTranspose2d(64 -> 3, kernel=4, stride=2, padding=1),
+        Tanh()
+    ]
+    weight_init: normal(mean=0.0, std=0.02)
+
+# Deep Convolutional GAN discriminator
+model DCGANDiscriminator:
+    type: discriminator
+    architecture: [
+        Conv2d(3 -> 64, kernel=4, stride=2, padding=1),
+        LeakyReLU(0.2),
+        Conv2d(64 -> 128, kernel=4, stride=2, padding=1),
+        BatchNorm2d(128), LeakyReLU(0.2),
+        Conv2d(128 -> 256, kernel=4, stride=2, padding=1),
+        BatchNorm2d(256), LeakyReLU(0.2),
+        Conv2d(256 -> 512, kernel=4, stride=2, padding=1),
+        BatchNorm2d(512), LeakyReLU(0.2),
+        Conv2d(512 -> 1, kernel=4, stride=1, padding=0)
+    ]
+    weight_init: normal(mean=0.0, std=0.02)
+
+# Wasserstein GAN with Gradient Penalty
+gan WGANTraining:
+    generator: DCGANGenerator
+    discriminator: DCGANDiscriminator
+    data: CelebAFaces
+    loss: wasserstein_gp
+    gradient_penalty_weight: 10.0
+    critic_steps: 5                    # discriminator updates per generator update
+    latent_dim: 128
+    latent_distribution: normal
+
+    optimizer_g:
+        type: Adam
+        lr: 0.0001
+        betas: [0.0, 0.9]
+
+    optimizer_d:
+        type: Adam
+        lr: 0.0001
+        betas: [0.0, 0.9]
+
+    epochs: 200
+    save_interval: 10
+    sample_grid: [8, 8]               # save 8x8 sample grid each interval
+    checkpoint_dir: "checkpoints/wgan_gp"
+
+metric FIDScore:
+    type: frechet_inception_distance
+    num_samples: 10000
+    inception_dims: 2048
+    device: cuda
+
+callback GANMonitor:
+    trigger: epoch_end
+    actions: [
+        SaveSampleGrid(path="outputs/samples/epoch_{epoch}.png", n=64),
+        LogMetric(FIDScore, every=5),
+        PlotLossCurves(save="outputs/loss_curves.png")
+    ]
+
+monitor GANHealth:
+    watch: [generator_loss, discriminator_loss, gradient_penalty, fid_score]
+    alert_if: gradient_penalty > 50.0
+    log_every: 100                     # steps
+    dashboard: "wandb"
+    project: "celeba-wgan-gp"
